@@ -629,6 +629,107 @@ button:disabled {
   animation: winnerGlow 1.7s ease-in-out infinite alternate;
 }
 
+.winner-celebration {
+  position: relative;
+  overflow: hidden;
+  margin-top: 10px;
+  min-height: 86px;
+  padding: 16px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(49, 231, 134, 0.28);
+  background:
+    linear-gradient(135deg, rgba(9, 44, 34, 0.96), rgba(8, 25, 38, 0.94)),
+    radial-gradient(circle at 20% 20%, rgba(49, 231, 134, 0.28), transparent 28%);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+  animation: playoffLift 1.2s ease both;
+}
+
+.winner-celebration::after {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  background: linear-gradient(110deg, transparent 38%, rgba(255, 255, 255, 0.2) 50%, transparent 62%);
+  transform: translateX(-55%) rotate(8deg);
+  animation: celebrationShine 2.2s ease-in-out infinite;
+}
+
+.celebration-copy {
+  position: relative;
+  z-index: 2;
+}
+
+.celebration-kicker {
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 5px;
+}
+
+.winner-celebration strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 1.35rem;
+  line-height: 1.15;
+}
+
+.celebration-bursts {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.celebration-bursts span {
+  position: absolute;
+  left: var(--left);
+  top: var(--top);
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #facc15;
+  box-shadow:
+    0 0 0 6px rgba(255, 255, 255, 0.05),
+    var(--x1) -14px 0 rgba(250, 204, 21, 0.9),
+    var(--x2) 13px 0 rgba(41, 211, 240, 0.85);
+  animation: crackerPop 1.45s ease-out infinite;
+  animation-delay: var(--d);
+}
+
+.final-celebration {
+  min-height: 122px;
+  padding: 22px 24px;
+  border-color: rgba(250, 204, 21, 0.42);
+  background:
+    radial-gradient(circle at 75% 20%, rgba(250, 204, 21, 0.34), transparent 26%),
+    linear-gradient(135deg, rgba(53, 34, 7, 0.98), rgba(9, 22, 44, 0.98));
+  animation: finalTrophyPulse 1.8s ease-in-out infinite alternate;
+}
+
+.final-celebration::before {
+  content: "TROPHY";
+  position: absolute;
+  right: 20px;
+  top: 18px;
+  color: rgba(250, 204, 21, 0.16);
+  font-size: 2.3rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.final-celebration .celebration-kicker {
+  color: #fde68a;
+}
+
+.final-celebration strong {
+  font-size: 1.8rem;
+}
+
+.champion-celebration {
+  margin-top: 14px;
+}
+
 .award-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -878,6 +979,52 @@ button:disabled {
   }
 }
 
+@keyframes playoffLift {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes celebrationShine {
+  0%, 45% {
+    transform: translateX(-65%) rotate(8deg);
+  }
+  80%, 100% {
+    transform: translateX(65%) rotate(8deg);
+  }
+}
+
+@keyframes crackerPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  24% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-18px) scale(1.6);
+  }
+}
+
+@keyframes finalTrophyPulse {
+  from {
+    box-shadow: 0 0 20px rgba(250, 204, 21, 0.14), 0 14px 34px rgba(0, 0, 0, 0.24);
+    transform: translateY(0);
+  }
+  to {
+    box-shadow: 0 0 46px rgba(250, 204, 21, 0.28), 0 18px 42px rgba(0, 0, 0, 0.3);
+    transform: translateY(-2px);
+  }
+}
+
 @media (max-width: 760px) {
   .live-draft-strip {
     grid-template-columns: 1fr;
@@ -889,6 +1036,16 @@ button:disabled {
 
   .auction-shell {
     grid-template-columns: 1fr;
+  }
+
+  .final-celebration::before {
+    right: 12px;
+    top: 12px;
+    font-size: 1.35rem;
+  }
+
+  .final-celebration strong {
+    font-size: 1.42rem;
   }
 }
 

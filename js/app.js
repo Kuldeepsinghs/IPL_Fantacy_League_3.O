@@ -394,6 +394,78 @@ function clamp(value, min, max){
     function getInFormCount(squad){ return (squad||[]).filter(p=>isPlayerInForm(p.playerName, p.role)).length; }
     function getSquadStrength(squad){ if(!squad||squad.length===0) return 0; let sum=0; squad.forEach(p=>sum+=getPlayerRating(p.playerName,p.role)); const counts=getRoleCounts(squad); const bal=getBalanceScore(counts,squad.length); const varS=getVarietyScore(squad); return Math.round((sum+bal+varS)*10)/10; }
     function getEffectiveSquad(playerObj){ if (playerObj.playing && Array.isArray(playerObj.playing.xi) && playerObj.playing.xi.length===11 && playerObj.playing.impact){ const names=new Set([...playerObj.playing.xi, playerObj.playing.impact]); return playerObj.squad.filter(p=>names.has(p.playerName)); } return playerObj.squad; }
+    function isCompletePlayingSelection(playing){
+      return !!(playing && Array.isArray(playing.xi) && playing.xi.length === 11 && playing.xi.every(Boolean) && playing.impact);
+    }
+    function isPlayingSelectionValidForSquad(playing, playerObj){
+      if(!isCompletePlayingSelection(playing) || !playerObj || !Array.isArray(playerObj.squad)) return false;
+      const squadNames = new Set(playerObj.squad.map(entry=>entry && entry.playerName).filter(Boolean));
+      return [...playing.xi, playing.impact].every(name=>squadNames.has(name));
+    }
+    function getPlayingSelectionUpdatedAt(playing){
+      return Date.parse((playing && playing.updatedAt) || "") || 0;
+    }
+    function findMatchingPlayerState(playerObj, index, sourcePlayers){
+      if(!playerObj || !Array.isArray(sourcePlayers)) return null;
+      if(playerObj.ownerUid){
+        const byOwner = sourcePlayers.find(entry=>entry && entry.ownerUid === playerObj.ownerUid);
+        if(byOwner) return byOwner;
+      }
+      if(playerObj.name){
+        const byName = sourcePlayers.find(entry=>entry && entry.name === playerObj.name);
+        if(byName) return byName;
+      }
+      return sourcePlayers[index] || null;
+    }
+    
+function mergeLocalPlayingSelections(incomingPlayers, incomingStateUpdatedAt) {
+  if (
+    !Array.isArray(incomingPlayers) ||
+    !Array.isArray(players) ||
+    players.length === 0
+  ) {
+    return incomingPlayers;
+  }
+
+  return incomingPlayers.map((incomingPlayer, index) => {
+    const localPlayer = findMatchingPlayerState(
+      incomingPlayer,
+      index,
+      players
+    );
+
+    if (
+      !localPlayer ||
+      !isPlayingSelectionValidForSquad(
+        localPlayer.playing,
+        incomingPlayer
+      )
+    ) {
+      return incomingPlayer;
+    }
+
+    const incomingPlaying = incomingPlayer && incomingPlayer.playing;
+    const localPlaying = localPlayer.playing;
+
+    const incomingIsIncomplete =
+      !isCompletePlayingSelection(incomingPlaying);
+
+    const incomingTime =
+      Date.parse((incomingPlaying && incomingPlaying.updatedAt) || "") || 0;
+
+    const localTime = getPlayingSelectionUpdatedAt(localPlaying);
+
+    if (incomingIsIncomplete || localTime > incomingTime) {
+      return {
+        ...incomingPlayer,
+        playing: localPlaying
+      };
+    }
+
+    return incomingPlayer;
+  });
+}
+
 
     // -----------------------
     // STATE
@@ -502,6 +574,7 @@ function clamp(value, min, max){
     const auctionTimer = document.getElementById("auctionTimer");
     const auctionBidAsSelect = document.getElementById("auctionBidAsSelect");
     const auctionBidBtn = document.getElementById("auctionBidBtn");
+    const auctionPassBtn = document.getElementById("auctionPassBtn");
     const auctionBid10Btn = document.getElementById("auctionBid10Btn");
     const auctionBid25Btn = document.getElementById("auctionBid25Btn");
     const auctionBid50Btn = document.getElementById("auctionBid50Btn");
@@ -752,6 +825,7 @@ function clamp(value, min, max){
         auctionState: auctionState ? JSON.parse(JSON.stringify(auctionState)) : null,
         leagueFlow: leagueFlow ? JSON.parse(JSON.stringify(leagueFlow)) : null,
         statsSyncVersion,
+        clientUpdatedAt: new Date().toISOString(),
         teamAValue: teamASelect ? teamASelect.value : "",
         teamBValue: teamBSelect ? teamBSelect.value : "",
         venueValue: venueSelect ? venueSelect.value : ""
@@ -805,7 +879,7 @@ function clamp(value, min, max){
       const incomingStatsSyncVersion = Number(roomState.statsSyncVersion) || 0;
       const shouldRefreshStatsFromRemote = !!(incomingStatsSyncVersion && incomingStatsSyncVersion !== statsSyncVersion);
       try{
-        players = Array.isArray(roomState.players) ? roomState.players : [];
+        players = Array.isArray(roomState.players) ? mergeLocalPlayingSelections(roomState.players, roomState.clientUpdatedAt) : [];
         currentPlayerIndex = Number.isFinite(roomState.currentPlayerIndex) ? roomState.currentPlayerIndex : 0;
         gameStarted = !!roomState.gameStarted;
         currentGameMode = roomState.gameMode || currentGameMode || "spin";
@@ -861,9 +935,35 @@ function clamp(value, min, max){
       } finally {
         applyingRemoteRoomState = false;
       }
+          // Let the host finalize a lot after receiving the final remote pass.
+    if (
+      canCurrentDeviceControlAuctionAdmin() &&
+      auctionState &&
+      auctionState.status === "running" &&
+      auctionState.currentLot &&
+      !auctionState.highestBidder &&
+      auctionState.passedLotId ===
+        (auctionState.currentLot.id || auctionState.currentLot.name)
+    ) {
+      const eligibleTeams =
+        getAuctionEligibleTeamsForLot(auctionState.currentLot);
+
+      const passedTeams = Array.isArray(auctionState.passedTeams)
+        ? auctionState.passedTeams
+        : [];
+
+      const allTeamsPassed =
+        eligibleTeams.length > 0 &&
+        eligibleTeams.every(team => passedTeams.includes(team.name));
+
+      if (allTeamsPassed) {
+        finalizeAuctionLot("all-teams-passed");
+      }
+    }
       if(shouldRefreshStatsFromRemote){
         refreshStatsFromServer("room sync", true);
       }
+
     }
     function deferOrApplyRoomGameState(roomState){
       if(!roomState || typeof roomState !== "object") return;
@@ -1330,6 +1430,8 @@ function clamp(value, min, max){
         highestBidder: "",
         highestBidderUid: "",
         bidHistory: [],
+        passedTeams: [],
+        passedLotId: null,
         soldLots: previousState && Array.isArray(previousState.soldLots) ? previousState.soldLots : [],
         unsoldLots: previousState && Array.isArray(previousState.unsoldLots) ? previousState.unsoldLots : [],
         pendingTrade: previousState && previousState.pendingTrade ? previousState.pendingTrade : null,
@@ -1385,6 +1487,8 @@ function clamp(value, min, max){
       }
       auctionState.unsoldLots = (auctionState.unsoldLots || []).filter(item=>item && item.name !== lot.name);
       auctionState.currentLot = lot;
+      auctionState.passedTeams = [];
+      auctionState.passedLotId = null;
       auctionState.currentBid = 0;
       auctionState.highestBidder = "";
       auctionState.highestBidderUid = "";
@@ -1415,6 +1519,8 @@ function clamp(value, min, max){
       const nextLot = Array.isArray(auctionState.lots) ? auctionState.lots[nextIndex] : null;
       auctionState.currentIndex = nextIndex;
       auctionState.currentLot = nextLot || null;
+      auctionState.passedTeams = [];
+auctionState.passedLotId = null;
       auctionState.currentBid = 0;
       auctionState.highestBidder = "";
       auctionState.highestBidderUid = "";
@@ -1480,8 +1586,22 @@ function clamp(value, min, max){
     function placeAuctionBid(customIncrement = null){
       if(!auctionState || !auctionState.currentLot || auctionState.status !== "running") return;
       const team = getAuctionControlledTeam();
+
       if(!team){
         if(auctionBidHint) auctionBidHint.textContent = "Bid from the device linked to that team name.";
+        return;
+      }
+      const lotId =
+        auctionState.currentLot.id || auctionState.currentLot.name;
+
+      if (
+        auctionState.passedLotId === lotId &&
+        (auctionState.passedTeams || []).includes(team.name)
+      ) {
+        if (auctionBidHint) {
+          auctionBidHint.textContent =
+            "Your team has passed on this player and cannot bid.";
+        }
         return;
       }
       const bidAmount = auctionState.currentBid > 0
@@ -1506,6 +1626,94 @@ function clamp(value, min, max){
       renderAuctionState();
       syncRoomGameState("auction-bid");
     }
+
+    
+
+function passOnCurrentAuctionLot() {
+  if (!auctionState || !auctionState.currentLot) return;
+  if (auctionState.status !== "running") return;
+
+  const team = getAuctionControlledTeam();
+
+  if (!team) {
+    if (auctionBidHint) {
+      auctionBidHint.textContent =
+        "This device is not linked to an eligible team.";
+    }
+    return;
+  }
+
+  const lot = auctionState.currentLot;
+  const lotId = lot.id || lot.name;
+
+  if (auctionState.passedLotId !== lotId) {
+    auctionState.passedLotId = lotId;
+    auctionState.passedTeams = [];
+  }
+
+  if (!Array.isArray(auctionState.passedTeams)) {
+    auctionState.passedTeams = [];
+  }
+
+  if (auctionState.passedTeams.includes(team.name)) {
+    if (auctionBidHint) {
+      auctionBidHint.textContent =
+        "Your team has already passed on this player.";
+    }
+    return;
+  }
+
+  const hasBid = (auctionState.bidHistory || []).some(
+    bid => bid && bid.team === team.name
+  );
+
+  if (hasBid) {
+    if (auctionBidHint) {
+      auctionBidHint.textContent =
+        "Your team has already bid on this player.";
+    }
+    return;
+  }
+
+  const eligibleTeams = getAuctionEligibleTeamsForLot(lot);
+
+  if (!eligibleTeams.some(entry => entry.name === team.name)) {
+    if (auctionBidHint) {
+      auctionBidHint.textContent =
+        "Your team is not eligible to bid on this player.";
+    }
+    return;
+  }
+
+  auctionState.passedTeams.push(team.name);
+
+  const allTeamsPassed =
+    eligibleTeams.length > 0 &&
+    eligibleTeams.every(entry =>
+      auctionState.passedTeams.includes(entry.name)
+    );
+
+  if (auctionBidHint) {
+    auctionBidHint.textContent = allTeamsPassed
+      ? "All eligible teams have passed on this player."
+      : `${team.name} passed on ${lot.name}.`;
+  }
+
+  renderAuctionState();
+  syncRoomGameState("auction-pass");
+
+  // Only the auction admin finalizes the lot.
+  if (
+    allTeamsPassed &&
+    !auctionState.highestBidder &&
+    canCurrentDeviceControlAuctionAdmin()
+  ) {
+    finalizeAuctionLot("all-teams-passed");
+  }
+}
+
+
+
     function renderAuctionPlayerProfile(lot){
       if(!auctionPlayerProfile) return;
       if(!lot){
@@ -1769,30 +1977,106 @@ function clamp(value, min, max){
       const controlledTeam = getTradeControlledTeam();
       return !!(controlledTeam && controlledTeam.name === request.toTeam);
     }
-    function applyTradeRequest(request){
-      if(!request) return false;
-      const teamA = (players || []).find(team=>team && team.name === request.fromTeam);
-      const teamB = (players || []).find(team=>team && team.name === request.toTeam);
-      if(!teamA || !teamB) return false;
-      const squadA = teamA.squad || [];
-      const squadB = teamB.squad || [];
-      const playerAIdx = squadA.findIndex(player=>(player.playerName || player.name) === request.fromPlayer);
-      const playerBIdx = squadB.findIndex(player=>(player.playerName || player.name) === request.toPlayer);
-      if(playerAIdx < 0 || playerBIdx < 0) return false;
-      const a = squadA[playerAIdx];
-      const b = squadB[playerBIdx];
-      squadA[playerAIdx] = b;
-      squadB[playerBIdx] = a;
-      teamA.playing = null;
-      teamB.playing = null;
-      if(auctionState) auctionState.pendingTrade = null;
-      if(tradeStatus) tradeStatus.textContent = `${a.playerName || a.name} swapped with ${b.playerName || b.name}.`;
-      renderPlayers();
-      renderAuctionState();
-      populateSimSelects();
-      syncRoomGameState("trade-accepted");
-      return true;
+
+    
+
+function applyTradeRequest(request) {
+  if (!request) return false;
+
+  // In online rooms, only the receiving team's owner may accept.
+  if (currentRoomId && !canCurrentDeviceAcceptTrade(request)) {
+    if (tradeStatus) {
+      tradeStatus.textContent =
+        "Only the receiving team's owner can accept this trade.";
     }
+    return false;
+  }
+
+  // Verify that this request is still the active pending request.
+  if (currentRoomId) {
+    if (
+      !auctionState ||
+      !auctionState.pendingTrade ||
+      auctionState.pendingTrade.id !== request.id
+    ) {
+      if (tradeStatus) {
+        tradeStatus.textContent =
+          "This trade request is no longer active.";
+      }
+      return false;
+    }
+  }
+
+  const teamA = (players || []).find(
+    team => team && team.name === request.fromTeam
+  );
+
+  const teamB = (players || []).find(
+    team => team && team.name === request.toTeam
+  );
+
+  if (!teamA || !teamB || teamA === teamB) {
+    if (tradeStatus) {
+      tradeStatus.textContent = "Invalid trade teams.";
+    }
+    return false;
+  }
+
+  const squadA = Array.isArray(teamA.squad) ? teamA.squad : [];
+  const squadB = Array.isArray(teamB.squad) ? teamB.squad : [];
+
+  const playerAIdx = squadA.findIndex(
+    player => player &&
+      (player.playerName || player.name) === request.fromPlayer
+  );
+
+  const playerBIdx = squadB.findIndex(
+    player => player &&
+      (player.playerName || player.name) === request.toPlayer
+  );
+
+  if (playerAIdx < 0 || playerBIdx < 0) {
+    if (tradeStatus) {
+      tradeStatus.textContent =
+        "Trade cancelled: one or both players are no longer available.";
+    }
+    return false;
+  }
+
+  // Exchange exactly one player from each team.
+  const playerA = squadA[playerAIdx];
+  const playerB = squadB[playerBIdx];
+
+  squadA[playerAIdx] = playerB;
+  squadB[playerBIdx] = playerA;
+
+  // Preserve completed match history and season statistics.
+  // Clear only the current XI selections so teams can be set up again.
+  teamA.playing = null;
+  teamB.playing = null;
+
+  if (auctionState) {
+    auctionState.pendingTrade = null;
+  }
+
+  promptedTradeRequestId = "";
+
+  if (tradeStatus) {
+    tradeStatus.textContent =
+      `${playerA.playerName || playerA.name} swapped with ` +
+      `${playerB.playerName || playerB.name}. Squads updated.`;
+  }
+
+  renderPlayers();
+  renderAuctionState();
+  renderTradeWindow();
+  populateSimSelects();
+
+  syncRoomGameState("trade-accepted");
+  return true;
+}
+
+
     function maybePromptTradeAcceptance(){
       const request = auctionState && auctionState.pendingTrade;
       if(!request || request.id === promptedTradeRequestId || !canCurrentDeviceAcceptTrade(request)) return;
@@ -1810,6 +2094,7 @@ function clamp(value, min, max){
         }
       }, 50);
     }
+
     function swapTradePlayers(){
       const idxA = parseInt(tradeTeamASelect.value, 10);
       const idxB = parseInt(tradeTeamBSelect.value, 10);
@@ -2188,6 +2473,13 @@ function clamp(value, min, max){
     if(auctionBidBtn){
       auctionBidBtn.addEventListener("click", ()=> placeAuctionBid());
     }
+
+      if (auctionPassBtn) {
+    auctionPassBtn.addEventListener(
+      "click",
+      passOnCurrentAuctionLot
+    );}
+
     if(auctionRebidBtn){
       auctionRebidBtn.addEventListener("click", ()=>startUnsoldRebid());
     }
@@ -2759,7 +3051,8 @@ function clamp(value, min, max){
         superOver: {
           batters: superOverBatters,
           bowler: superOverBowler
-        }
+        },
+        updatedAt: new Date().toISOString()
       };
       msg.textContent = "Saved!";
       msg.className = "xi-ok";
@@ -3057,34 +3350,38 @@ function clamp(value, min, max){
     // ---------- SIMULATION: more realistic wickets & scoreboard ----------
     function randomNoise(r){ return (Math.random()*2-1)*r; }
 
-    function getOrderedXI(playerObj){
-      const available = playerObj.squad.filter(p=>getDynamicAvailability(p.playerName) > 0);
-      const injuryFiltered = available.length >= 11 ? available : playerObj.squad.slice();
-      if(playerObj.playing && playerObj.playing.xi && playerObj.playing.xi.length===11){
-        const ordered = [];
-        const used = new Set();
-        playerObj.playing.xi.forEach(name=>{
-          const inSquad = injuryFiltered.find(p=>p.playerName === name);
-          if(inSquad && !used.has(name)){ ordered.push(name); used.add(name); }
-        });
-        if(ordered.length < 11){
-          const fillers = injuryFiltered
-            .filter(p=>!used.has(p.playerName))
-            .sort((a,b)=>getPlayerRating(b.playerName,b.role)-getPlayerRating(a.playerName,a.role));
-          fillers.forEach(p=>{
-            if(ordered.length < 11){ ordered.push(p.playerName); used.add(p.playerName); }
-          });
-        }
-        while(ordered.length<11) ordered.push("substitute");
-        return ordered.slice(0,11);
-      }
-      const squad = injuryFiltered.slice();
-      const rolePriority = {BAT:0, WK:1, AR:2, BOWL:3};
-      squad.sort((a,b)=> (rolePriority[getBaseRole(a.role)] - rolePriority[getBaseRole(b.role)]) || a.playerName.localeCompare(b.playerName));
-      const xi = squad.slice(0,11).map(p=>p.playerName);
-      while(xi.length<11) xi.push("substitute");
-      return xi;
-    }
+    
+function getOrderedXI(playerObj) {
+  const squad = Array.isArray(playerObj?.squad) ? playerObj.squad : [];
+  const savedXI = playerObj?.playing?.xi;
+
+  // Preserve the exact batting order selected by the team owner.
+  if (
+    Array.isArray(savedXI) &&
+    savedXI.length === 11 &&
+    savedXI.every(name => typeof name === "string" && name.trim() !== "") &&
+    new Set(savedXI).size === 11
+  ) {
+    return [...savedXI];
+  }
+
+  // Fallback only when no valid Playing XI has been saved.
+  const available = squad.filter(
+    player => getDynamicAvailability(player.playerName) > 0
+  );
+
+  const candidates = available.length >= 11 ? available : squad;
+  const rolePriority = { BAT: 0, WK: 1, AR: 2, BOWL: 3 };
+
+  const ordered = [...candidates].sort((a, b) =>
+    (rolePriority[getBaseRole(a.role)] ?? 4) -
+      (rolePriority[getBaseRole(b.role)] ?? 4) ||
+    a.playerName.localeCompare(b.playerName)
+  );
+
+  return ordered.slice(0, 11).map(player => player.playerName);
+}
+
 
     function getBowlingAttack(opponent){
       let pool = (opponent.squad || []).slice();
@@ -3359,29 +3656,67 @@ function clamp(value, min, max){
     }
 
     // decide realistic wickets for an innings using score, batting strength and bowling strength
-    function decideWickets(score, battingStrength, bowlingStrength){
-      // baseline average wickets in T20 ~ 5
-      // stronger batting -> fewer wickets, stronger bowling -> more wickets
-      const base = 5;
-      const strengthDiff = bowlingStrength - battingStrength; // positive -> bowlers stronger -> more wickets
-      // scale effect
-      let expected = base + strengthDiff*0.12;
-      // influence of runs: high score -> fewer wickets
-      if(score >= 200) expected -= 1.5;
-      else if(score >= 170) expected -= 0.8;
-      else if(score < 130) expected += 0.8;
-      // randomness
-      expected += randomNoise(1.6);
-      let wickets = Math.round(expected);
-      if(wickets < 0) wickets = 0;
-      if(wickets > 10) wickets = 10;
-      // rarely all out in T20; reduce chance of 10 unless bowling is much stronger and score low
-      if(wickets === 10){
-        const chance = Math.random();
-        if(chance > 0.4) wickets = 7 + Math.floor(Math.random()*3); // 7-9 more likely than 10
-      }
-      return wickets;
-    }
+    // function decideWickets(score, battingStrength, bowlingStrength){
+    //   // baseline average wickets in T20 ~ 5
+    //   // stronger batting -> fewer wickets, stronger bowling -> more wickets
+    //   const base = 5;
+    //   const strengthDiff = bowlingStrength - battingStrength; // positive -> bowlers stronger -> more wickets
+    //   // scale effect
+    //   let expected = base + strengthDiff*0.12;
+    //   // influence of runs: high score -> fewer wickets
+    //   if(score >= 200) expected -= 1.5;
+    //   else if(score >= 170) expected -= 0.8;
+    //   else if(score < 130) expected += 0.8;
+    //   // randomness
+    //   expected += randomNoise(1.6);
+    //   let wickets = Math.round(expected);
+    //   if(wickets < 0) wickets = 0;
+    //   if(wickets > 10) wickets = 10;
+    //   // rarely all out in T20; reduce chance of 10 unless bowling is much stronger and score low
+    //   if(wickets === 10){
+    //     const chance = Math.random();
+    //     if(chance > 0.4) wickets = 7 + Math.floor(Math.random()*3); // 7-9 more likely than 10
+    //   }
+    //   return wickets;
+    // }
+
+    
+function decideWickets(score, battingStrength, bowlingStrength) {
+  // A typical T20 innings loses around five wickets.
+  const base = 5;
+
+  // Positive difference means the bowling attaxck is stronger.
+  const strengthDiff = bowlingStrength - battingStrength;
+
+  // Give the matchup a meaningful but controlled influence.
+  let expected = base + strengthDiff * 0.28;
+
+  // Score context: high-scoring innings tend to involve more survival;
+  // low-scoring innings can reflect stronger bowling or batting collapse.
+  if (score >= 210) {
+    expected -= 1.0;
+  } else if (score >= 185) {
+    expected -= 0.5;
+  } else if (score < 125) {
+    expected += 1.0;
+  } else if (score < 150) {
+    expected += 0.5;
+  }
+
+  // Keep randomness, but limit how much it can distort the matchup.
+  expected += randomNoise(1.3);
+
+  let wickets = Math.round(expected);
+  wickets = Math.max(0, Math.min(10, wickets));
+
+  // Ten wickets should remain possible, but uncommon.
+  if (wickets === 10 && Math.random() > 0.3) {
+    wickets = 7 + Math.floor(Math.random() * 3);
+  }
+
+  return wickets;
+}
+
 
     function clampValue(v, minV, maxV){
       return Math.max(minV, Math.min(maxV, v));
@@ -3669,14 +4004,33 @@ function clamp(value, min, max){
         const base = Math.max(0.1, (p.rating || 7.0) - 6.2);
         const pos = positionBoost[idx] || 0.64;
         const stayBoost = outSet.has(idx) ? 0.86 : 1.18;
-        const srBoost = Math.max(0.7, (p.strikeRate || 135) / 145);
+        // const srBoost = Math.max(0.7, (p.strikeRate || 135) / 145);
+
+        const srBoost = clampValue(
+  1 + (((p.strikeRate || 135) - 140) / 180),
+  0.82,
+  1.22
+);
         const formBoost = isPlayerInForm(p.name, p.role) ? 1.12 : 1;
         const phaseSkill = getPhaseSkill(p.name, idx);
         const style = styleProfiles[idx] || { runShare: 1 };
         const chaseIntent = idx <= 1 ? chasePhaseIntent.pp : (idx <= 5 ? chasePhaseIntent.middle : chasePhaseIntent.death);
         const chaseBoost = chaseContext ? (1 + Math.max(-0.12, chaseIntent * 0.12) + Math.max(0, pressureIndex - 0.3) * 0.05) : 1;
         const dayBoost = 0.82 + Math.random() * 0.4;
-        let weight = Math.pow(base, 1.7) * pos * stayBoost * srBoost * formBoost * phaseSkill.runMultiplier * style.runShare * chaseBoost * dayBoost * (0.92 + Math.random() * 0.26);
+       
+        // let weight = Math.pow(base, 1.7) * pos * stayBoost * srBoost * formBoost * phaseSkill.runMultiplier * style.runShare * chaseBoost * dayBoost * (0.92 + Math.random() * 0.26);
+       let weight =
+  Math.pow(base, 1.55) *
+  pos *
+  stayBoost *
+  srBoost *
+  formBoost *
+  phaseSkill.runMultiplier *
+  style.runShare *
+  chaseBoost *
+  dayBoost *
+  (0.92 + Math.random() * 0.26);
+       
         if(idx === anchorIdx) weight *= anchorBoost;
         if(idx === secondAnchorIdx) weight *= secondBoost;
         if(centuryMode && idx === anchorIdx) weight *= 1.22;
@@ -3803,7 +4157,13 @@ function clamp(value, min, max){
         const aggressionStrikeAdj = aggressionLevel * 7;
         const strikeBase = Math.max(68, (p.strikeRate || 132) + (p.rating - 7.0) * 5 + phaseSkill.strikeAdj + style.strikeAdj + pressureStrikeAdj + aggressionStrikeAdj);
         const dotImpact = chaseContext ? (1 + dotPressure * 0.2 - boundaryRelief * 0.1) : 1;
-        const computedBalls = r === 0 ? (outSet.has(idx) ? 1 : 0) : Math.max(1, Math.round(((r * 100) / strikeBase) * dotImpact + randomNoise(3)));
+        // const computedBalls = r === 0 ? (outSet.has(idx) ? 1 : 0) : Math.max(1, Math.round(((r * 100) / strikeBase) * dotImpact + randomNoise(3)));
+        const computedBalls = r === 0
+  ? (outSet.has(idx) ? 1 : 0)
+  : Math.max(
+      1,
+      Math.round(((r * 100) / strikeBase) * dotImpact + randomNoise(2))
+    );
         const dismissalBallBonus = outSet.has(idx) ? 1 : 0;
         const balls = Math.max(outSet.has(idx) ? 1 : 0, computedBalls + dismissalBallBonus);
         const freeHitBonus = extrasInfo && extrasInfo.freeHitBalls ? Math.max(0, Math.round((extrasInfo.freeHitBalls * (style.tag === "aggressor" || style.tag === "pinch" ? 0.32 : 0.2)) + randomNoise(0.6))) : 0;
@@ -4121,10 +4481,10 @@ function clamp(value, min, max){
         const ppNamed = POWERPLAY_SPECIALISTS[name] || 0;
         const middleNamed = MIDDLE_OVERS_SPECIALISTS[name] || 0;
         const deathNamed = DEATH_SPECIALISTS[name] || 0;
-        const specialistAdj = Math.max(-0.2, Math.min(0.22, (ppNamed + middleNamed + deathNamed) * 0.035));
+        const specialistAdj = Math.max(-0.2, Math.min(0.22, (ppNamed + middleNamed + deathNamed) * 0.045));
         const econ = getBowlingEconomy(name, role) * pitchMods.econMul * (1 - specialistAdj);
         const oversBowled = ballsByBowler[i] / 6;
-        const noise = isSpecialistBowlingRole(role) ? 2.0 : 2.4;
+        const noise = isSpecialistBowlingRole(role) ? 1.6 : 2.6;
         return Math.max(0, (oversBowled * econ) + randomNoise(noise));
       });
       const baseSum = baseRunsAlloc.reduce((a,b)=>a+b,0) || 1;
@@ -4605,27 +4965,164 @@ function clamp(value, min, max){
       const bowlingFormA = bowlersA.reduce((acc,b)=> acc + getCurrentFormScore(b.playerName || b.name, b.role || "BOWL"), 0) / Math.max(1, bowlersA.length);
       const bowlingFormB = bowlersB.reduce((acc,b)=> acc + getCurrentFormScore(b.playerName || b.name, b.role || "BOWL"), 0) / Math.max(1, bowlersB.length);
 
-      const base = 171;
-      const battingImpactA = (batSRA - 138) * 1.45 + (top4SRA - 145) * 0.55 + currentFormA * 8.5 + topOrderFormA * 11.5 + inFormA * 1.2;
-      const battingImpactB = (batSRB - 138) * 1.45 + (top4SRB - 145) * 0.55 + currentFormB * 8.5 + topOrderFormB * 11.5 + inFormB * 1.2;
-      const bowlingImpactOnA = (econB - 8.0) * 8.4 - bowlingFormB * 7.4; // stronger in-form bowling lowers total
-      const bowlingImpactOnB = (econA - 8.0) * 8.4 - bowlingFormA * 7.4;
-      const strengthImpact = diff * 0.24 + (currentFormA - currentFormB) * 9.5;
-      const battingFireA = (top4SRA - 148) * 0.02 + (topOrderFormA - 0.8) * 0.22 + (currentFormA - 0.8) * 0.15 + (econB - 8.0) * 0.08;
-      const battingFireB = (top4SRB - 148) * 0.02 + (topOrderFormB - 0.8) * 0.22 + (currentFormB - 0.8) * 0.15 + (econA - 8.0) * 0.08;
-      const bigTotalChanceA = Math.max(0.08, Math.min(0.48, 0.18 + battingFireA));
-      const bigTotalChanceB = Math.max(0.08, Math.min(0.48, 0.18 + battingFireB));
-      const inningsVarianceA = randomNoise(18) + (Math.random() < 0.24 ? randomNoise(20) : 0);
-      const inningsVarianceB = randomNoise(18) + (Math.random() < 0.24 ? randomNoise(20) : 0);
-      const collapseSwingA = Math.random() < Math.max(0.08, 0.2 - battingFireA * 0.12 + bowlingFormB * 0.08) ? -(12 + Math.random() * 22) : 0;
-      const collapseSwingB = Math.random() < Math.max(0.08, 0.2 - battingFireB * 0.12 + bowlingFormA * 0.08) ? -(12 + Math.random() * 22) : 0;
-      const explosionSwingA = Math.random() < bigTotalChanceA ? (14 + Math.random() * 28) : 0;
-      const explosionSwingB = Math.random() < bigTotalChanceB ? (14 + Math.random() * 28) : 0;
+      // const base = 171;
+      // const battingImpactA = (batSRA - 138) * 1.45 + (top4SRA - 145) * 0.55 + currentFormA * 8.5 + topOrderFormA * 11.5 + inFormA * 1.2;
+      // const battingImpactB = (batSRB - 138) * 1.45 + (top4SRB - 145) * 0.55 + currentFormB * 8.5 + topOrderFormB * 11.5 + inFormB * 1.2;
+      // const bowlingImpactOnA = (econB - 8.0) * 8.4 - bowlingFormB * 7.4; // stronger in-form bowling lowers total
+      // const bowlingImpactOnB = (econA - 8.0) * 8.4 - bowlingFormA * 7.4;
+      // const strengthImpact = diff * 0.24 + (currentFormA - currentFormB) * 9.5;
+      // const battingFireA = (top4SRA - 148) * 0.02 + (topOrderFormA - 0.8) * 0.22 + (currentFormA - 0.8) * 0.15 + (econB - 8.0) * 0.08;
+      // const battingFireB = (top4SRB - 148) * 0.02 + (topOrderFormB - 0.8) * 0.22 + (currentFormB - 0.8) * 0.15 + (econA - 8.0) * 0.08;
+      // const bigTotalChanceA = Math.max(0.08, Math.min(0.48, 0.18 + battingFireA));
+      // const bigTotalChanceB = Math.max(0.08, Math.min(0.48, 0.18 + battingFireB));
+      // const inningsVarianceA = randomNoise(18) + (Math.random() < 0.24 ? randomNoise(20) : 0);
+      // const inningsVarianceB = randomNoise(18) + (Math.random() < 0.24 ? randomNoise(20) : 0);
+      // const collapseSwingA = Math.random() < Math.max(0.08, 0.2 - battingFireA * 0.12 + bowlingFormB * 0.08) ? -(12 + Math.random() * 22) : 0;
+      // const collapseSwingB = Math.random() < Math.max(0.08, 0.2 - battingFireB * 0.12 + bowlingFormA * 0.08) ? -(12 + Math.random() * 22) : 0;
+      // const explosionSwingA = Math.random() < bigTotalChanceA ? (14 + Math.random() * 28) : 0;
+      // const explosionSwingB = Math.random() < bigTotalChanceB ? (14 + Math.random() * 28) : 0;
 
-      const pitchEffectA = conditions.pitch === "spin" ? (styleB.spin - styleA.spin) * -0.22 : conditions.pitch === "pace" ? (styleB.pace - styleA.pace) * -0.22 : 0;
-      const pitchEffectB = conditions.pitch === "spin" ? (styleA.spin - styleB.spin) * -0.22 : conditions.pitch === "pace" ? (styleA.pace - styleB.pace) * -0.22 : 0;
-      let scoreA = base + battingImpactA + bowlingImpactOnA + strengthImpact + pitchEffectA + conditions.baseRunAdj + inningsVarianceA + collapseSwingA + explosionSwingA;
-      let scoreB = base + battingImpactB + bowlingImpactOnB - strengthImpact + pitchEffectB + conditions.baseRunAdj + inningsVarianceB + collapseSwingB + explosionSwingB;
+      // const pitchEffectA = conditions.pitch === "spin" ? (styleB.spin - styleA.spin) * -0.22 : conditions.pitch === "pace" ? (styleB.pace - styleA.pace) * -0.22 : 0;
+      // const pitchEffectB = conditions.pitch === "spin" ? (styleA.spin - styleB.spin) * -0.22 : conditions.pitch === "pace" ? (styleA.pace - styleB.pace) * -0.22 : 0;
+      // let scoreA = base + battingImpactA + bowlingImpactOnA + strengthImpact + pitchEffectA + conditions.baseRunAdj + inningsVarianceA + collapseSwingA + explosionSwingA;
+      // let scoreB = base + battingImpactB + bowlingImpactOnB - strengthImpact + pitchEffectB + conditions.baseRunAdj + inningsVarianceB + collapseSwingB + explosionSwingB;
+
+      
+const base = 171;
+
+// Batting quality: reward strike rate, top-order quality and current form.
+const battingImpactA =
+  (batSRA - 138) * 1.15 +
+  (top4SRA - 145) * 0.45 +
+  currentFormA * 6.5 +
+  topOrderFormA * 8.0 +
+  inFormA * 0.8;
+
+const battingImpactB =
+  (batSRB - 138) * 1.15 +
+  (top4SRB - 145) * 0.45 +
+  currentFormB * 6.5 +
+  topOrderFormB * 8.0 +
+  inFormB * 0.8;
+
+// Lower economy and stronger bowling form reduce the opponent's score.
+// Clamp the contribution so one metric cannot dominate the innings.
+const bowlingImpactOnA = Math.max(
+  -22,
+  Math.min(22, (econB - 8.0) * 7.0 - bowlingFormB * 5.5)
+);
+
+const bowlingImpactOnB = Math.max(
+  -22,
+  Math.min(22, (econA - 8.0) * 7.0 - bowlingFormA * 5.5)
+);
+
+// Keep squad quality meaningful, but avoid letting it decide every match.
+const strengthImpact = Math.max(
+  -12,
+  Math.min(12, diff * 0.16 + (currentFormA - currentFormB) * 5.0)
+);
+
+// A strong batting matchup can produce a big score, but not too frequently.
+const battingFireA =
+  (top4SRA - 148) * 0.012 +
+  (topOrderFormA - 0.8) * 0.15 +
+  (currentFormA - 0.8) * 0.10 +
+  (econB - 8.0) * 0.045;
+
+const battingFireB =
+  (top4SRB - 148) * 0.012 +
+  (topOrderFormB - 0.8) * 0.15 +
+  (currentFormB - 0.8) * 0.10 +
+  (econA - 8.0) * 0.045;
+
+const bigTotalChanceA = Math.max(
+  0.08,
+  Math.min(0.35, 0.16 + battingFireA)
+);
+
+const bigTotalChanceB = Math.max(
+  0.08,
+  Math.min(0.35, 0.16 + battingFireB)
+);
+
+// Preserve match-to-match unpredictability without letting randomness dominate.
+const inningsVarianceA =
+  randomNoise(12) + (Math.random() < 0.18 ? randomNoise(12) : 0);
+
+const inningsVarianceB =
+  randomNoise(12) + (Math.random() < 0.18 ? randomNoise(12) : 0);
+
+// Better batting reduces collapse risk; better opposition bowling increases it.
+const collapseChanceA = Math.max(
+  0.08,
+  Math.min(0.28, 0.18 - battingFireA * 0.08 + bowlingFormB * 0.045)
+);
+
+const collapseChanceB = Math.max(
+  0.08,
+  Math.min(0.28, 0.18 - battingFireB * 0.08 + bowlingFormA * 0.045)
+);
+
+const collapseSwingA =
+  Math.random() < collapseChanceA ? -(10 + Math.random() * 16) : 0;
+
+const collapseSwingB =
+  Math.random() < collapseChanceB ? -(10 + Math.random() * 16) : 0;
+
+const explosionSwingA =
+  Math.random() < bigTotalChanceA ? 10 + Math.random() * 22 : 0;
+
+const explosionSwingB =
+  Math.random() < bigTotalChanceB ? 10 + Math.random() * 22 : 0;
+
+// Pitch suitability: the bowling side's matching style influences the innings.
+const pitchEffectA =
+  conditions.pitch === "spin"
+    ? (styleB.spin - styleA.spin) * -0.18
+    : conditions.pitch === "pace"
+      ? (styleB.pace - styleA.pace) * -0.18
+      : 0;
+
+const pitchEffectB =
+  conditions.pitch === "spin"
+    ? (styleA.spin - styleB.spin) * -0.18
+    : conditions.pitch === "pace"
+      ? (styleA.pace - styleB.pace) * -0.18
+      : 0;
+
+let scoreA =
+  base +
+  battingImpactA +
+  bowlingImpactOnA +
+  strengthImpact +
+  pitchEffectA +
+  conditions.baseRunAdj +
+  inningsVarianceA +
+  collapseSwingA +
+  explosionSwingA;
+
+let scoreB =
+  base +
+  battingImpactB +
+  bowlingImpactOnB -
+  strengthImpact +
+  pitchEffectB +
+  conditions.baseRunAdj +
+  inningsVarianceB +
+  collapseSwingB +
+  explosionSwingB;
+
+// Chasing advantage remains, but is deliberately modest.
+if (tossInfo.battingFirstIdx === idxA) {
+  scoreB += 3 + conditions.chaseAdj + randomNoise(4);
+} else {
+  scoreA += 3 + conditions.chaseAdj + randomNoise(4);
+}
+
+scoreA = Math.max(92, Math.min(252, Math.round(scoreA)));
+scoreB = Math.max(92, Math.min(252, Math.round(scoreB)));
+
       if(tossInfo.battingFirstIdx === idxA){
         scoreB += 4 + conditions.chaseAdj + randomNoise(5);
       } else {
@@ -4817,6 +5314,59 @@ function clamp(value, min, max){
       const parts = s.split(".");
       return parseInt(parts[0], 10) * 6 + parseInt(parts[1], 10);
     }
+    function getWinnerNameFromMatch(matchRes){
+      if(!matchRes) return "";
+      const winnerIdx = matchRes.winnerIdx === 0 ? matchRes.idxA : matchRes.winnerIdx === 1 ? matchRes.idxB : matchRes.idxA;
+      return players[winnerIdx] ? players[winnerIdx].name : "";
+    }
+    function getPlayoffCelebrationKind(label, tag){
+      const raw = String(tag || label || "").toLowerCase();
+      if(raw.includes("final")) return "final";
+      if(raw.includes("qualifier") || raw.includes("eliminator") || raw === "q1" || raw === "q2" || raw === "elim") return "playoff";
+      return "";
+    }
+    function createWinnerCelebration(label, matchRes, tag){
+      const kind = getPlayoffCelebrationKind(label, tag);
+      const winnerName = getWinnerNameFromMatch(matchRes);
+      if(!kind || !winnerName) return null;
+      const wrap = document.createElement("div");
+      wrap.className = `winner-celebration ${kind === "final" ? "final-celebration" : "playoff-celebration"}`;
+      const burstCount = kind === "final" ? 18 : 10;
+      const bursts = Array.from({ length: burstCount }, (_, index)=>{
+        const x = (index % 6) - 2.5;
+        return `<span style="--left:${8 + (index % 9) * 10}%; --top:${14 + (index % 4) * 16}%; --x1:${x * 9}px; --x2:${x * -8}px; --d:${(index % 5) * 0.12}s"></span>`;
+      }).join("");
+      const stageText = kind === "final" ? "IPL Champion" : `${label} Winner`;
+      wrap.innerHTML = `<div class="celebration-bursts">${bursts}</div><div class="celebration-copy"><div class="celebration-kicker">${stageText}</div><strong>${winnerName}</strong><div class="small-text">${kind === "final" ? "Trophy lift celebration" : "Qualified through the knockout pressure"}</div></div>`;
+      return wrap;
+    }
+    function playCrackerSound(kind = "playoff"){
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if(!AudioContextCtor) return;
+      const audioCtx = new AudioContextCtor();
+      const now = audioCtx.currentTime;
+      const master = audioCtx.createGain();
+      master.gain.setValueAtTime(kind === "final" ? 0.18 : 0.1, now);
+      master.gain.exponentialRampToValueAtTime(0.001, now + (kind === "final" ? 1.8 : 1.0));
+      master.connect(audioCtx.destination);
+      const pops = kind === "final" ? 14 : 7;
+      for(let i=0; i<pops; i++){
+        const start = now + i * (kind === "final" ? 0.09 : 0.11);
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = i % 2 ? "triangle" : "square";
+        osc.frequency.setValueAtTime(520 + Math.random() * 740, start);
+        osc.frequency.exponentialRampToValueAtTime(90 + Math.random() * 80, start + 0.08);
+        gain.gain.setValueAtTime(0.001, start);
+        gain.gain.exponentialRampToValueAtTime(0.55, start + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.12);
+        osc.connect(gain);
+        gain.connect(master);
+        osc.start(start);
+        osc.stop(start + 0.14);
+      }
+      window.setTimeout(()=>audioCtx.close().catch(()=>{}), kind === "final" ? 2200 : 1300);
+    }
     // ---------- Simulate single match button ----------
     simulateBtn.addEventListener("click", ()=>{
       if(!canCurrentDeviceControlMatches()){ simResult.textContent = "Only the host can run shared match simulations."; return; }
@@ -4872,8 +5422,10 @@ function clamp(value, min, max){
       return wrap;
     }
 
-    function appendMatchBlock(container, label, matchRes){
+    function appendMatchBlock(container, label, matchRes, tag = ""){
       const block = document.createElement("div"); block.className = "match-block";
+      const celebration = createWinnerCelebration(label, matchRes, tag);
+      if(celebration) block.appendChild(celebration);
       const venueTag = matchRes && matchRes.conditions && matchRes.conditions.venue ? ` | 📍 ${matchRes.conditions.venue}` : "";
       const head = document.createElement("div"); head.className = "collapsible"; head.textContent = `${label}: ${matchRes.summaryLine}${venueTag} | 📊 Click to view scoreboard`;
       block.appendChild(head);
@@ -4903,8 +5455,14 @@ function clamp(value, min, max){
       tournamentResult.appendChild(stageLine);
       const holder = document.createElement("div");
       holder.style.marginTop = "8px";
-      leagueFlow.history.forEach(h=> appendMatchBlock(holder, h.label, h.res));
+      leagueFlow.history.forEach(h=> appendMatchBlock(holder, h.label, h.res, h.tag));
       tournamentResult.appendChild(holder);
+      if(leagueFlow.championName){
+        const champEl = document.createElement("div");
+        champEl.className = "winner-celebration final-celebration champion-celebration";
+        champEl.innerHTML = `<div class="celebration-copy"><div class="celebration-kicker">Tournament Complete</div><strong>${leagueFlow.championName}</strong><div class="small-text">IPL Champion</div></div>`;
+        tournamentResult.appendChild(champEl);
+      }
       playNextMatchBtn.disabled = !leagueFlow || leagueFlow.phase === "done";
     }
 
@@ -4963,6 +5521,7 @@ function clamp(value, min, max){
         elimWinner: null,
         q1Winner: null,
         q1Loser: null,
+        championName: "",
         venueQueue: [],
         venueCursor: 0,
         lastVenue: ""
@@ -5050,21 +5609,20 @@ function clamp(value, min, max){
         return;
       }
       updateSeasonStatsFromMatch(res);
-      leagueFlow.history.push({ label: pf.label, res });
+      leagueFlow.history.push({ label: pf.label, res, tag: pf.tag });
       const winner = res.winnerIdx===0 ? res.idxA : res.winnerIdx===1 ? res.idxB : res.idxA;
       const loser = winner === res.idxA ? res.idxB : res.idxA;
       if(pf.tag === "elim") leagueFlow.elimWinner = winner;
       if(pf.tag === "q1"){ leagueFlow.q1Winner = winner; leagueFlow.q1Loser = loser; }
       if(pf.tag === "q2") leagueFlow.q2Winner = winner;
+      const celebrationKind = getPlayoffCelebrationKind(pf.label, pf.tag);
+      if(celebrationKind) playCrackerSound(celebrationKind);
       if(pf.tag === "final"){
-        const champEl = document.createElement("div");
-        champEl.style.marginTop = "8px";
-        champEl.innerHTML = `<strong>🏆 CHAMPION: ${players[winner].name}</strong>`;
+        leagueFlow.championName = players[winner].name;
         leagueFlow.phase = "done";
         renderStatsDashboard();
         renderRivalryBoard();
         refreshLeagueView();
-        tournamentResult.appendChild(champEl);
         return;
       }
       leagueFlow.nextPlayoff++;

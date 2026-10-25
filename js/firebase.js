@@ -193,11 +193,121 @@ export async function updateRoomSettings(roomId, settings){
 export async function updateRoomGameState(roomId, gameState){
   const safeRoomId = cleanRoomCode(roomId);
   if(!safeRoomId) throw new Error("Missing room code.");
-  await updateDoc(doc(db, "rooms", safeRoomId), {
-    gameState: gameState || null,
-    updatedAt: serverTimestamp()
+  const roomRef = doc(db, "rooms", safeRoomId);
+  await runTransaction(db, async (transaction)=>{
+    const snap = await transaction.get(roomRef);
+    if(!snap.exists()) throw new Error("Room not found.");
+    const data = snap.data() || {};
+    const existingState = data.gameState && typeof data.gameState === "object" ? data.gameState : null;
+    const mergedState = preserveExistingPlayingSelections(gameState || null, existingState);
+    transaction.update(roomRef, {
+      gameState: mergedState,
+      updatedAt: serverTimestamp()
+    });
   });
 }
+
+function getPlayerNameSet(player){
+  return new Set((player && Array.isArray(player.squad) ? player.squad : [])
+    .map(entry=>entry && (entry.playerName || entry.name))
+    .filter(Boolean));
+}
+
+function isCompletePlayingSelection(playing){
+  return !!(playing
+    && Array.isArray(playing.xi)
+    && playing.xi.length === 11
+    && playing.xi.every(Boolean)
+    && playing.impact);
+}
+
+function isPlayingSelectionValidForSquad(playing, player){
+  if(!isCompletePlayingSelection(playing)) return false;
+  const names = getPlayerNameSet(player);
+  if(!names.size) return false;
+  return [...playing.xi, playing.impact].every(name=>names.has(name));
+}
+
+function shouldPreservePlaying(incomingPlayer, existingPlayer){
+  const incomingPlaying = incomingPlayer && incomingPlayer.playing;
+  const existingPlaying = existingPlayer && existingPlayer.playing;
+  if(!isPlayingSelectionValidForSquad(existingPlaying, incomingPlayer)) return false;
+  if(!isCompletePlayingSelection(incomingPlaying)) return true;
+  const incomingAt = Date.parse(incomingPlaying.updatedAt || "") || 0;
+  const existingAt = Date.parse(existingPlaying.updatedAt || "") || 0;
+  return existingAt > incomingAt;
+}
+
+function findMatchingExistingPlayer(incomingPlayer, incomingIndex, existingPlayers){
+  if(!incomingPlayer || !Array.isArray(existingPlayers)) return null;
+  if(incomingPlayer.ownerUid){
+    const byOwner = existingPlayers.find(player=>player && player.ownerUid === incomingPlayer.ownerUid);
+    if(byOwner) return byOwner;
+  }
+  if(incomingPlayer.name){
+    const byName = existingPlayers.find(player=>player && player.name === incomingPlayer.name);
+    if(byName) return byName;
+  }
+  return existingPlayers[incomingIndex] || null;
+}
+
+
+function preserveExistingPlayingSelections(nextState, existingState) {
+  if (
+    !nextState ||
+    typeof nextState !== "object" ||
+    !existingState ||
+    !Array.isArray(nextState.players) ||
+    !Array.isArray(existingState.players)
+  ) {
+    return nextState;
+  }
+
+  return {
+    ...nextState,
+    players: nextState.players.map((incomingPlayer, index) => {
+      const existingPlayer = findMatchingExistingPlayer(
+        incomingPlayer,
+        index,
+        existingState.players
+      );
+
+      if (
+        !existingPlayer ||
+        !isPlayingSelectionValidForSquad(
+          existingPlayer.playing,
+          incomingPlayer
+        )
+      ) {
+        return incomingPlayer;
+      }
+
+      const incomingPlaying = incomingPlayer.playing;
+      const existingPlaying = existingPlayer.playing;
+
+      // Preserve the saved selection if the incoming state has no
+      // complete XI, impact player, or is older than the saved selection.
+      const incomingIsIncomplete =
+        !isCompletePlayingSelection(incomingPlaying);
+
+      const incomingTime =
+        Date.parse((incomingPlaying && incomingPlaying.updatedAt) || "") || 0;
+
+      const existingTime =
+        Date.parse((existingPlaying && existingPlaying.updatedAt) || "") || 0;
+
+      if (incomingIsIncomplete || existingTime > incomingTime) {
+        return {
+          ...incomingPlayer,
+          playing: existingPlaying
+        };
+      }
+
+      return incomingPlayer;
+    })
+  };
+}
+
 
 export function subscribeToRoom(roomId, callback){
   const safeRoomId = cleanRoomCode(roomId);
