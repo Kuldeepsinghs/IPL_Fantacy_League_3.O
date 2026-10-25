@@ -870,101 +870,194 @@ function mergeLocalPlayingSelections(incomingPlayers, incomingStateUpdatedAt) {
         setFirebaseStatus(`Room sync failed${reason ? ` during ${reason}` : ""}: ${err.message}`, "error");
       });
     }
-    function applyRoomGameState(roomState){
-      if(!roomState || typeof roomState !== "object") return;
-      const incomingStateJson = JSON.stringify(roomState);
-      if(incomingStateJson === lastAppliedRoomGameStateJson) return;
-      lastAppliedRoomGameStateJson = incomingStateJson;
-      applyingRemoteRoomState = true;
-      const incomingStatsSyncVersion = Number(roomState.statsSyncVersion) || 0;
-      const shouldRefreshStatsFromRemote = !!(incomingStatsSyncVersion && incomingStatsSyncVersion !== statsSyncVersion);
-      try{
-        players = Array.isArray(roomState.players) ? mergeLocalPlayingSelections(roomState.players, roomState.clientUpdatedAt) : [];
-        currentPlayerIndex = Number.isFinite(roomState.currentPlayerIndex) ? roomState.currentPlayerIndex : 0;
-        gameStarted = !!roomState.gameStarted;
-        currentGameMode = roomState.gameMode || currentGameMode || "spin";
-        if(gameModeSelect) gameModeSelect.value = currentGameMode;
-        selectedTeamName = roomState.selectedTeamName || null;
-        lastSpin = roomState.lastSpin && typeof roomState.lastSpin === "object" ? roomState.lastSpin : { playerIndex: null, team: null };
-        if(Number.isFinite(roomState.maxPlayersPerTeam)){
-          maxPlayersPerTeam = roomState.maxPlayersPerTeam;
-          if(maxPerTeamInput) maxPerTeamInput.value = String(roomState.maxPlayersPerTeam);
-        }
-        if(Number.isFinite(roomState.wheelRotation)){
-          currentRotation = roomState.wheelRotation;
-          wheelEl.style.transform = `rotate(${currentRotation}deg)`;
-        }
-        if(pickSearch) pickSearch.value = roomState.pickSearchValue || "";
-        if(spinInfo) spinInfo.innerHTML = roomState.spinInfoHtml || (gameStarted && players[currentPlayerIndex] ? `${players[currentPlayerIndex].name}, it's your turn. Tap Spin.` : "Game not started yet. Use Setup tab first.");
-        if(pickForm){
-          pickForm.style.display = roomState.pickFormVisible ? "block" : "none";
-          if(roomState.pickFormVisible && selectedTeamName && players[currentPlayerIndex]){
-            pickedTeamLabel.textContent = selectedTeamName;
-            populatePlayerSelect(selectedTeamName, players[currentPlayerIndex], roomState.pickSearchValue || "");
-          }
-        }
-        seasonStats = roomState.seasonStats && typeof roomState.seasonStats === "object" ? roomState.seasonStats : createEmptySeasonStats();
-        rivalryStats = roomState.rivalryStats && typeof roomState.rivalryStats === "object" ? roomState.rivalryStats : {};
-        latestPicks = Array.isArray(roomState.latestPicks) ? roomState.latestPicks : [];
-        auctionState = roomState.auctionState && typeof roomState.auctionState === "object" ? roomState.auctionState : null;
-        leagueFlow = roomState.leagueFlow && typeof roomState.leagueFlow === "object" ? roomState.leagueFlow : null;
-        if(incomingStatsSyncVersion){
-          statsSyncVersion = incomingStatsSyncVersion;
-        }
-        if(teamASelect && typeof roomState.teamAValue === "string") teamASelect.value = roomState.teamAValue;
-        if(teamBSelect && typeof roomState.teamBValue === "string") teamBSelect.value = roomState.teamBValue;
-        if(venueSelect && typeof roomState.venueValue === "string") venueSelect.value = roomState.venueValue;
-        if(simResult) simResult.innerHTML = roomState.simResultHtml || "";
-        if(tournamentResult) tournamentResult.innerHTML = roomState.tournamentResultHtml || "";
-        if(tossResultLine) tossResultLine.textContent = roomState.tossResultText || "";
-        downloadBtn.disabled = !gameStarted;
-        simulateBtn.disabled = !gameStarted || !canCurrentDeviceControlMatches();
-        tournamentBtn.disabled = !gameStarted || !canCurrentDeviceControlMatches();
-        playNextMatchBtn.disabled = !leagueFlow || leagueFlow.phase === "done" || !canCurrentDeviceControlMatches();
-        applyModeUI();
-        renderPlayers();
-        renderGlobalSummary();
-        updateBestSquadSummary();
-        populateSimSelects();
-        updateGameStatus();
-        updateActivePlayerHighlight();
-        renderLatestPickFeed();
-        renderAuctionState();
-        renderStatsDashboard();
-        renderRivalryBoard();
-      } finally {
-        applyingRemoteRoomState = false;
-      }
-          // Let the host finalize a lot after receiving the final remote pass.
-    if (
-      canCurrentDeviceControlAuctionAdmin() &&
-      auctionState &&
-      auctionState.status === "running" &&
-      auctionState.currentLot &&
-      !auctionState.highestBidder &&
-      auctionState.passedLotId ===
-        (auctionState.currentLot.id || auctionState.currentLot.name)
-    ) {
-      const eligibleTeams =
-        getAuctionEligibleTeamsForLot(auctionState.currentLot);
+    
+function applyRoomGameState(roomState) {
+  if (!roomState || typeof roomState !== "object") return;
 
-      const passedTeams = Array.isArray(auctionState.passedTeams)
-        ? auctionState.passedTeams
-        : [];
+  const incomingStateJson = JSON.stringify(roomState);
+  if (incomingStateJson === lastAppliedRoomGameStateJson) return;
 
-      const allTeamsPassed =
-        eligibleTeams.length > 0 &&
-        eligibleTeams.every(team => passedTeams.includes(team.name));
+  lastAppliedRoomGameStateJson = incomingStateJson;
+  applyingRemoteRoomState = true;
 
-      if (allTeamsPassed) {
-        finalizeAuctionLot("all-teams-passed");
+  const incomingStatsSyncVersion =
+    Number(roomState.statsSyncVersion) || 0;
+
+  const shouldRefreshStatsFromRemote =
+    !!(
+      incomingStatsSyncVersion &&
+      incomingStatsSyncVersion !== statsSyncVersion
+    );
+
+  try {
+    players = Array.isArray(roomState.players)
+      ? mergeLocalPlayingSelections(
+          roomState.players,
+          roomState.clientUpdatedAt
+        )
+      : [];
+
+    currentPlayerIndex = Number.isFinite(roomState.currentPlayerIndex)
+      ? roomState.currentPlayerIndex
+      : 0;
+
+    gameStarted = !!roomState.gameStarted;
+    currentGameMode = roomState.gameMode || currentGameMode || "spin";
+
+    if (gameModeSelect) gameModeSelect.value = currentGameMode;
+
+    selectedTeamName = roomState.selectedTeamName || null;
+
+    lastSpin =
+      roomState.lastSpin && typeof roomState.lastSpin === "object"
+        ? roomState.lastSpin
+        : { playerIndex: null, team: null };
+
+    if (Number.isFinite(roomState.maxPlayersPerTeam)) {
+      maxPlayersPerTeam = roomState.maxPlayersPerTeam;
+      if (maxPerTeamInput) {
+        maxPerTeamInput.value = String(roomState.maxPlayersPerTeam);
       }
     }
-      if(shouldRefreshStatsFromRemote){
-        refreshStatsFromServer("room sync", true);
-      }
 
+    if (Number.isFinite(roomState.wheelRotation)) {
+      currentRotation = roomState.wheelRotation;
+      wheelEl.style.transform = `rotate(${currentRotation}deg)`;
     }
+
+    if (pickSearch) {
+      pickSearch.value = roomState.pickSearchValue || "";
+    }
+
+    if (spinInfo) {
+      spinInfo.innerHTML =
+        roomState.spinInfoHtml ||
+        (gameStarted && players[currentPlayerIndex]
+          ? `${players[currentPlayerIndex].name}, it's your turn. Tap Spin.`
+          : "Game not started yet. Use Setup tab first.");
+    }
+
+    if (pickForm) {
+      pickForm.style.display = roomState.pickFormVisible ? "block" : "none";
+
+      if (
+        roomState.pickFormVisible &&
+        selectedTeamName &&
+        players[currentPlayerIndex]
+      ) {
+        pickedTeamLabel.textContent = selectedTeamName;
+        populatePlayerSelect(
+          selectedTeamName,
+          players[currentPlayerIndex],
+          roomState.pickSearchValue || ""
+        );
+      }
+    }
+
+    seasonStats =
+      roomState.seasonStats && typeof roomState.seasonStats === "object"
+        ? roomState.seasonStats
+        : createEmptySeasonStats();
+
+    rivalryStats =
+      roomState.rivalryStats && typeof roomState.rivalryStats === "object"
+        ? roomState.rivalryStats
+        : {};
+
+    latestPicks = Array.isArray(roomState.latestPicks)
+      ? roomState.latestPicks
+      : [];
+
+    auctionState =
+      roomState.auctionState &&
+      typeof roomState.auctionState === "object"
+        ? roomState.auctionState
+        : null;
+
+    leagueFlow =
+      roomState.leagueFlow && typeof roomState.leagueFlow === "object"
+        ? roomState.leagueFlow
+        : null;
+
+    if (incomingStatsSyncVersion) {
+      statsSyncVersion = incomingStatsSyncVersion;
+    }
+
+    if (teamASelect && typeof roomState.teamAValue === "string") {
+      teamASelect.value = roomState.teamAValue;
+    }
+
+    if (teamBSelect && typeof roomState.teamBValue === "string") {
+      teamBSelect.value = roomState.teamBValue;
+    }
+
+    if (venueSelect && typeof roomState.venueValue === "string") {
+      venueSelect.value = roomState.venueValue;
+    }
+
+    if (simResult) simResult.innerHTML = roomState.simResultHtml || "";
+    if (tournamentResult) {
+      tournamentResult.innerHTML = roomState.tournamentResultHtml || "";
+    }
+    if (tossResultLine) {
+      tossResultLine.textContent = roomState.tossResultText || "";
+    }
+
+    downloadBtn.disabled = !gameStarted;
+    simulateBtn.disabled = !gameStarted || !canCurrentDeviceControlMatches();
+    tournamentBtn.disabled = !gameStarted || !canCurrentDeviceControlMatches();
+
+    playNextMatchBtn.disabled =
+      !leagueFlow ||
+      leagueFlow.phase === "done" ||
+      !canCurrentDeviceControlMatches();
+
+    applyModeUI();
+    renderPlayers();
+    renderGlobalSummary();
+    updateBestSquadSummary();
+    populateSimSelects();
+    updateGameStatus();
+    updateActivePlayerHighlight();
+    renderLatestPickFeed();
+    renderAuctionState();
+    renderStatsDashboard();
+    renderRivalryBoard();
+  } finally {
+    applyingRemoteRoomState = false;
+  }
+
+  // Let the host finalize a lot after receiving the final remote pass.
+  if (
+    canCurrentDeviceControlAuctionAdmin() &&
+    auctionState &&
+    auctionState.status === "running" &&
+    auctionState.currentLot &&
+    !auctionState.highestBidder &&
+    auctionState.passedLotId ===
+      (auctionState.currentLot.id || auctionState.currentLot.name)
+  ) {
+    const eligibleTeams =
+      getAuctionEligibleTeamsForLot(auctionState.currentLot);
+
+    const passedTeams = Array.isArray(auctionState.passedTeams)
+      ? auctionState.passedTeams
+      : [];
+
+    const allTeamsPassed =
+      eligibleTeams.length > 0 &&
+      eligibleTeams.every(team => passedTeams.includes(team.name));
+
+    if (allTeamsPassed) {
+      finalizeAuctionLot("all-teams-passed");
+    }
+  }
+
+  if (shouldRefreshStatsFromRemote) {
+    refreshStatsFromServer("room sync", true);
+  }
+}
+
     function deferOrApplyRoomGameState(roomState){
       if(!roomState || typeof roomState !== "object") return;
       if(activeXIEditorState){
@@ -1242,6 +1335,7 @@ function mergeLocalPlayingSelections(incomingPlayers, incomingStateUpdatedAt) {
       if(!auctionState || !auctionState.currentLot || !auctionState.endAt) return 0;
       return Math.max(0, Math.ceil((auctionState.endAt - Date.now()) / 1000));
     }
+
     function getAuctionControlledTeam(){
       if(!players || !Array.isArray(players)) return null;
       const viewerUid = getCurrentGuestUser() && getCurrentGuestUser().uid;
@@ -1627,7 +1721,23 @@ auctionState.passedLotId = null;
       syncRoomGameState("auction-bid");
     }
 
-    
+function getAuctionEligibleTeamsForLot(lot) {
+  if (!lot || !Array.isArray(players)) return [];
+
+  return players.filter(team => {
+    if (!team || !team.name) return false;
+
+    // Teams that have already bid are no longer eligible to pass.
+    const hasBid = (auctionState?.bidHistory || []).some(
+      bid => bid && bid.team === team.name
+    );
+
+    if (hasBid) return false;
+
+    // Check the team's remaining purse.
+    return (team.purse ?? 12000) >= (lot.basePrice ?? 0);
+  });
+}
 
 function passOnCurrentAuctionLot() {
   if (!auctionState || !auctionState.currentLot) return;
@@ -1686,13 +1796,15 @@ function passOnCurrentAuctionLot() {
   }
 
   auctionState.passedTeams.push(team.name);
-
-  const allTeamsPassed =
-    eligibleTeams.length > 0 &&
-    eligibleTeams.every(entry =>
-      auctionState.passedTeams.includes(entry.name)
-    );
-
+  
+const allTeamsPassed =
+  eligibleTeams.length > 0 &&
+  eligibleTeams.every(entry =>
+    auctionState.passedTeams.includes(entry.name) ||
+    (auctionState.bidHistory || []).some(
+      bid => bid && bid.team === entry.name
+    )
+  );
   if (auctionBidHint) {
     auctionBidHint.textContent = allTeamsPassed
       ? "All eligible teams have passed on this player."
@@ -2474,11 +2586,20 @@ function applyTradeRequest(request) {
       auctionBidBtn.addEventListener("click", ()=> placeAuctionBid());
     }
 
-      if (auctionPassBtn) {
-    auctionPassBtn.addEventListener(
-      "click",
-      passOnCurrentAuctionLot
-    );}
+if (auctionPassBtn) {
+  auctionPassBtn.addEventListener("click", () => {
+    const confirmed = window.confirm(
+      "Are you sure you want to mark this player as Not Interested?\n\n" +
+      "Click OK to continue or Cancel to keep the current player."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    passOnCurrentAuctionLot();
+  });
+}
 
     if(auctionRebidBtn){
       auctionRebidBtn.addEventListener("click", ()=>startUnsoldRebid());

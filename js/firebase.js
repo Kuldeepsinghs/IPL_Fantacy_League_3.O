@@ -190,22 +190,81 @@ export async function updateRoomSettings(roomId, settings){
   });
 }
 
-export async function updateRoomGameState(roomId, gameState){
+
+export async function updateRoomGameState(roomId, gameState) {
   const safeRoomId = cleanRoomCode(roomId);
-  if(!safeRoomId) throw new Error("Missing room code.");
+
+  if (!safeRoomId) {
+    throw new Error("Missing room code.");
+  }
+
   const roomRef = doc(db, "rooms", safeRoomId);
-  await runTransaction(db, async (transaction)=>{
+
+  await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(roomRef);
-    if(!snap.exists()) throw new Error("Room not found.");
+
+    if (!snap.exists()) {
+      throw new Error("Room not found.");
+    }
+
     const data = snap.data() || {};
-    const existingState = data.gameState && typeof data.gameState === "object" ? data.gameState : null;
-    const mergedState = preserveExistingPlayingSelections(gameState || null, existingState);
+
+    const existingState =
+      data.gameState &&
+      typeof data.gameState === "object"
+        ? data.gameState
+        : null;
+
+    const mergedState = preserveExistingPlayingSelections(
+      gameState || null,
+      existingState
+    );
+
+    // Merge pass lists only when both states refer to the same
+    // running auction lot. Never carry passes to the next player.
+    const incomingAuction = mergedState?.auctionState;
+    const existingAuction = existingState?.auctionState;
+
+    if (
+      incomingAuction &&
+      existingAuction &&
+      incomingAuction.status === "running" &&
+      existingAuction.status === "running" &&
+      incomingAuction.currentLot &&
+      existingAuction.currentLot &&
+      (incomingAuction.currentLot.id ||
+        incomingAuction.currentLot.name) ===
+        (existingAuction.currentLot.id ||
+          existingAuction.currentLot.name)
+    ) {
+      const incomingPasses = Array.isArray(incomingAuction.passedTeams)
+        ? incomingAuction.passedTeams
+        : [];
+
+      const existingPasses =
+        existingAuction.passedLotId ===
+        (existingAuction.currentLot.id ||
+          existingAuction.currentLot.name) &&
+        Array.isArray(existingAuction.passedTeams)
+          ? existingAuction.passedTeams
+          : [];
+
+      incomingAuction.passedLotId =
+        incomingAuction.currentLot.id ||
+        incomingAuction.currentLot.name;
+
+      incomingAuction.passedTeams = [
+        ...new Set([...existingPasses, ...incomingPasses])
+      ];
+    }
+
     transaction.update(roomRef, {
       gameState: mergedState,
       updatedAt: serverTimestamp()
     });
   });
 }
+
 
 function getPlayerNameSet(player){
   return new Set((player && Array.isArray(player.squad) ? player.squad : [])
